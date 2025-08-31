@@ -1,0 +1,482 @@
+import requests
+import pandas as pd
+import logging
+import time
+import os
+from datetime import datetime
+import openpyxl
+
+class ETFCrawler:
+    def __init__(self):
+        # 基本配置
+        self.BASE_URL = "https://www.jisilu.cn/data/etf/etf_list/"
+        self.HEADERS = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": "https://www.jisilu.cn/data/etf/",
+            "Accept": "application/json"
+        }
+        self.session = requests.Session()
+        
+        # 文件配置
+        self.DATA_DIR = "etf_data1"
+        self.SUMMARY_FILE = "index_summary.xlsx"  # 改为xlsx
+        self.CHANGES_FILE = "daily_changes.xlsx"  # 改为xlsx
+        self.CUMULATIVE_FILE = "cumulative_changes.xlsx"  # 改为xlsx
+        self.MANUAL_EXCEL = "manual_index_data.xlsx"
+        self.FIRST_DAY_SHARES = "first_day_shares.xlsx"
+        
+        # 创建数据目录
+        os.makedirs(self.DATA_DIR, exist_ok=True)
+
+    def make_request(self, max_retries=3):
+        """带重试机制的请求函数"""
+        for attempt in range(max_retries):
+            try:
+                params = {
+                    "__jsl": f"LST_t={int(time.time()*1000)}",
+                    "rp": 9999
+                }
+                response = self.session.get(
+                    self.BASE_URL,
+                    params=params,
+                    timeout=15
+                )
+                response.raise_for_status()
+                return response
+            except requests.exceptions.SSLError as e:
+                logging.warning(f"SSL错误（尝试 {attempt+1}/{max_retries}）: {e}")
+                time.sleep(2)
+            except requests.exceptions.RequestException as e:
+                logging.warning(f"请求失败（尝试 {attempt+1}/{max_retries}）: {e}")
+                time.sleep(2)
+        return None
+
+    def fetch_data(self):
+        """获取ETF数据并验证"""
+        logging.info("开始获取ETF数据...")
+        response = self.make_request()
+        if not response:
+            logging.error("请求失败")
+            return pd.DataFrame()
+
+        try:
+            data = response.json()
+            if not isinstance(data, dict) or "rows" not in data:
+                logging.error("响应数据结构异常")
+                return pd.DataFrame()
+            records = []
+            for item in data["rows"]:
+                cell = item.get("cell", {})
+                try:
+                    records.append({
+                        "代码": str(cell.get("fund_id", "")).strip(),
+                        "名称": cell.get("fund_nm", ""),
+                        "净值": float(cell.get("fund_nav", 0)),
+                        "份额(万份)": float(cell.get("amount", 0)),
+                        "指数": cell.get("index_nm", "")
+                    })
+                except (ValueError, TypeError) as e:
+                    logging.warning(f"数据解析异常: {e}，跳过该记录")
+            
+            df = pd.DataFrame(records)
+            if df.empty:
+                logging.error("获取到的ETF数据为空")
+                return df
+            
+            # 数据验证
+            zero_nav = df[df['净值'] == 0]
+            zero_share = df[df['份额(万份)'] == 0]
+            if not zero_nav.empty:
+                logging.warning(f"发现{len(zero_nav)}条净值为0的记录")
+            if not zero_share.empty:
+                logging.warning(f"发现{len(zero_share)}条份额为0的记录")
+            
+            logging.info(f"成功获取{len(df)}条ETF数据，净值范围[{df['净值'].min():.2f}-{df['净值'].max():.2f}]")
+            return df
+            
+        except Exception as e:
+            logging.error(f"数据处理失败: {e}")
+            return pd.DataFrame()
+
+    def save_daily_data(self, df):
+        """保存每日数据为Excel"""
+        if df.empty:
+            logging.warning("无数据可保存")
+            return False
+        
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        filename = os.path.join(self.DATA_DIR, f"ETF_{date_str}.xlsx")  # 改为xlsx
+        
+        try:
+            df.to_excel(
+                filename,
+                index=False,
+                engine='openpyxl'
+            )
+            logging.info(f"数据已保存至Excel文件 {filename}")
+            return True
+        except Exception as e:
+            logging.error(f"保存失败: {e}")
+            return False
+
+    def get_previous_shares(self):
+        """获取历史份额数据（带严格错误检查）"""
+        def safe_read_excel(path):
+            try:
+                df = pd.read_excel(
+                    path,
+                    engine='openpyxl',
+                    dtype={'代码': str},  # 关键修正点
+                    usecols=['代码', '份额(万份)']  # 明确指定列
+                )
+                df['代码'] = df['代码'].str.strip()
+                return df
+            except Exception as e:
+                print(f"读取Excel失败 [{path}]: {str(e)}")
+                return None
+
+        # 1. 优先读取手动准备的初始数据
+        if os.path.exists(self.FIRST_DAY_SHARES):
+            df = safe_read_excel(self.FIRST_DAY_SHARES)
+            if df is not None:
+                print("√ 成功读取初始份额数据")
+                return df[['代码', '份额(万份)']]
+
+        # 2. 尝试读取历史Excel文件
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        excel_files = sorted(
+            [f for f in os.listdir(self.DATA_DIR) 
+             if f.startswith("ETF_") and f.endswith(".xlsx") and not f.endswith(f"{date_str}.xlsx")],
+            reverse=True
+        )
+        if excel_files:
+            try:
+                df = pd.read_excel(
+                    os.path.join(self.DATA_DIR, excel_files[0]),
+                    engine='openpyxl',
+                    dtype={'代码': str},
+                    usecols=['代码', '份额(万份)']
+                )
+                df['代码'] = df['代码'].str.strip()
+                print(f"√ 读取历史Excel数据: {excel_files[0]}")
+                return df[['代码', '份额(万份)']]
+            except Exception as e:
+                print(f"读取Excel失败: {str(e)}")
+
+        print("× 无可用历史数据")
+        return None
+
+    def calculate_daily_changes(self, today_df):
+        """计算规模变化（增强版）"""
+        prev_shares = self.get_previous_shares()
+        
+        if prev_shares is None:
+            logging.warning("无历史份额数据，将计算当日规模")
+            today_df['规模变化'] = today_df['净值'] * today_df['份额(万份)']
+            return today_df[['代码', '指数', '规模变化']]
+        
+        # 数据预处理
+        today_df['代码'] = today_df['代码'].astype(str).str.strip()
+        prev_shares['代码'] = prev_shares['代码'].astype(str).str.strip()
+        
+        # 调试输出
+        logging.info(f"今日数据前5条:\n{today_df[['代码','净值','份额(万份)']].head()}")
+        logging.info(f"历史份额前5条:\n{prev_shares.head()}")
+        
+        # 合并数据（保留所有记录用于调试）
+        merged = pd.merge(
+            today_df[['代码', '净值', '份额(万份)', '指数']],
+            prev_shares,
+            on='代码',
+            how='outer',
+            suffixes=('_today', '_yesterday'),
+            indicator=True
+        ).reset_index(drop=True)
+        
+        # 分析合并结果
+        merge_stats = merged['_merge'].value_counts()
+        logging.info(f"合并情况:\n{merge_stats}")
+        
+        # 计算变化（只处理今日存在的ETF）
+        result = merged[merged['_merge'].isin(['both', 'left_only'])]
+        result['规模变化'] = result['净值'] * (
+            result['份额(万份)_today'].fillna(0) - 
+            result['份额(万份)_yesterday'].fillna(0)
+        )
+        
+        # 标记新增ETF
+        new_etfs = result['_merge'] == 'left_only'
+        if new_etfs.any():
+            logging.info(f"发现{new_etfs.sum()}只新增ETF")
+        
+        # 结果验证
+        zero_changes = result[result['规模变化'] == 0]
+        if len(zero_changes) > 0.5 * len(result):
+            logging.warning(f"发现{len(zero_changes)}条零变化记录，请检查数据！")
+            sample = zero_changes.head().merge(
+                today_df[['代码', '净值', '份额(万份)']], 
+                on='代码'
+            )
+            logging.info(f"零变化样例:\n{sample}")
+        
+        return result[['代码', '指数', '规模变化']]
+
+    def aggregate_by_index(self, changes_df):
+        """指数聚合（严格模式）"""
+        if changes_df is None or changes_df.empty:
+            logging.error("无有效变化数据")
+            return pd.DataFrame(columns=['指数', '规模变化'])
+        try:
+            # 读取参考指数
+            ref_df = pd.read_excel(
+                self.MANUAL_EXCEL,
+                engine='openpyxl',
+                header=0
+            )
+            valid_indices = ref_df['指数'].dropna().unique()
+            # 标记新增指数
+            new_indices_mask = ~changes_df['指数'].isin(valid_indices)
+            new_indices = changes_df[new_indices_mask]['指数'].unique()
+            if len(new_indices) > 0:
+                logging.info(f"发现{len(new_indices)}个新增指数: {new_indices}")
+            
+                # 准备新增指数数据
+                new_rows = []
+                for idx in new_indices:
+                    # 对于新指数，规模变化应该是其ETF的净值×份额
+                    etf_data = changes_df[changes_df['指数'] == idx]
+                    total_change = etf_data['规模变化'].sum()
+                    new_rows.append({
+                        '指数': idx,
+                        '规模变化': total_change
+                    })
+            
+                # 将新增指数添加到manual_index_data.xlsx
+                new_indices_df = pd.DataFrame({
+                    '指数': new_indices,
+                    '份额(万份)': 0,
+                    '计数项': None
+                })
+            
+                # 根据原始格式调整列顺序
+                if len(ref_df.columns) == 3:
+                    new_indices_df = new_indices_df[['计数项', '份额(万份)', '指数']]
+
+                # 合并新旧数据并去重
+                updated_ref_df = pd.concat([ref_df, new_indices_df]).drop_duplicates(subset=['指数'])
+                # 保存更新后的文件
+                updated_ref_df.to_excel(
+                    self.MANUAL_EXCEL,
+                    index=False,
+                    engine='openpyxl'
+                )
+                logging.info(f"已将{len(new_indices)}个新增指数添加到{self.MANUAL_EXCEL}")
+            
+                # 立即重新加载有效指数列表
+                valid_indices = updated_ref_df['指数'].dropna().unique()
+        
+            # 最终聚合结果 - 包含原有指数和新增指数
+            aggregated = changes_df.groupby('指数', as_index=False)['规模变化'].sum().reset_index(drop=True)
+            aggregated = aggregated.sort_values('指数', key=lambda x: x.str.strip())
+            
+            # 额外的数据验证
+            logging.info(f"聚合后指数数量: {len(aggregated)}")
+            logging.info(f"聚合后前5个指数: {aggregated['指数'].head().tolist()}")
+            
+            return aggregated
+        
+        except Exception as e:
+            logging.error(f"指数聚合失败: {e}")
+            # 回退到简单聚合
+            return changes_df.groupby('指数', as_index=False)['规模变化'].sum().reset_index(drop=True)
+
+    def update_summary_files(self, aggregated_changes):
+        """更新汇总文件（修复数据错位问题）"""
+        if aggregated_changes is None or aggregated_changes.empty:
+            logging.error("无有效聚合数据")
+            return False
+        
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        daily_path = os.path.join(self.DATA_DIR, self.CHANGES_FILE)
+        cumulative_path = os.path.join(self.DATA_DIR, self.CUMULATIVE_FILE)
+
+        try:
+            # 创建变化字典，用于精确映射
+            change_dict = dict(zip(aggregated_changes['指数'], aggregated_changes['规模变化']))
+            
+            # 读取或创建每日变化文件
+            if os.path.exists(daily_path):
+                daily_df = pd.read_excel(daily_path, engine='openpyxl')
+                
+                # 格式化现有日期列名
+                date_cols = [col for col in daily_df.columns if col != '指数']
+                for col in date_cols:
+                    if isinstance(col, datetime):
+                        new_col_name = col.strftime("%Y-%m-%d")
+                        daily_df = daily_df.rename(columns={col: new_col_name})
+                
+                # 处理新增指数：在正确位置插入新行
+                existing_indices = set(daily_df['指数'])
+                new_indices = set(aggregated_changes['指数']) - existing_indices
+                
+                if new_indices:
+                    logging.info(f"发现{len(new_indices)}个新增指数: {sorted(new_indices)}")
+                    
+                    # 为新增指数创建完整的行数据
+                    new_rows_data = []
+                    for idx in new_indices:
+                        row_data = {'指数': idx}
+                        # 为所有历史日期填充0
+                        for existing_date in daily_df.columns:
+                            if existing_date != '指数':
+                                row_data[existing_date] = 0
+                        new_rows_data.append(row_data)
+                    
+                    new_rows_df = pd.DataFrame(new_rows_data)
+                    daily_df = pd.concat([daily_df, new_rows_df], ignore_index=True)
+
+                # 检查是否已存在当日数据
+                if date_str in daily_df.columns:
+                    logging.warning(f"覆盖已有日期数据: {date_str}")
+                
+                # 使用精确映射更新当日数据
+                daily_df[date_str] = daily_df['指数'].map(change_dict).fillna(0)
+                
+            else:
+                # 创建新的每日变化文件
+                daily_df = pd.DataFrame({
+                    '指数': aggregated_changes['指数'],
+                    date_str: aggregated_changes['规模变化']
+                })
+                daily_df = daily_df.sort_values('指数').reset_index(drop=True)
+
+            # 读取或创建累计文件
+            if os.path.exists(cumulative_path):
+                cum_df = pd.read_excel(cumulative_path, engine='openpyxl', dtype={'指数': str})
+                
+                # 确保累计文件包含所有指数（包括新增的）
+                missing_indices = set(daily_df['指数']) - set(cum_df['指数'])
+                if missing_indices:
+
+                    logging.info(f"累计文件中添加{len(missing_indices)}个新指数")
+                    new_rows_data = []
+                    for idx in missing_indices:
+                        row_data = {'指数': idx}
+                        # 为现有累计列填充0
+                        for col in cum_df.columns:
+                            if col != '指数':
+                                row_data[col] = 0
+                        new_rows_data.append(row_data)
+                    
+                    new_rows_df = pd.DataFrame(new_rows_data)
+                    cum_df = pd.concat([cum_df, new_rows_df], ignore_index=True)
+                
+                # 确保指数顺序一致
+                cum_df = cum_df.sort_values('指数').reset_index(drop=True)
+                
+            else:
+                cum_df = pd.DataFrame({'指数': daily_df['指数'].copy()})
+
+            # 计算累计变化（修复数据对齐问题）
+            date_cols = [col for col in daily_df.columns if col != '指数']
+            
+            # 确保两个DataFrame的指数顺序完全一致
+            daily_df = daily_df.sort_values('指数').reset_index(drop=True)
+            cum_df = cum_df.sort_values('指数').reset_index(drop=True)
+            
+            # 验证指数对齐
+            if not daily_df['指数'].equals(cum_df['指数']):
+                logging.error("daily_df和cum_df的指数不一致！")
+                logging.info(f"daily_df指数: {daily_df['指数'].tolist()[:10]}")
+                logging.info(f"cum_df指数: {cum_df['指数'].tolist()[:10]}")
+                logging.info(f"cum_df指数: {cum_df['指数'].tolist()[:10]}")
+                
+                # 强制对齐
+                cum_df = cum_df.set_index('指数').reindex(daily_df['指数']).reset_index()
+                cum_df['指数'] = daily_df['指数']  # 确保指数列正确
+            
+            # 计算累计变化
+            days = len(date_cols)
+            if days > 0:
+                # 只对存在于daily_df中的日期列进行累计计算
+                valid_date_cols = [col for col in date_cols if col in daily_df.columns]
+                cum_df[f"{days}天累计"] = daily_df[valid_date_cols].sum(axis=1)
+            
+            # 保存文件
+            daily_df.to_excel(daily_path, index=False, engine='openpyxl')
+            cum_df.to_excel(cumulative_path, index=False, engine='openpyxl')
+        
+            logging.info(f"成功更新汇总文件，包含{len(date_cols)}个交易日数据")
+            logging.info(f"每日变化文件指数数量: {len(daily_df)}")
+            logging.info(f"累计变化文件指数数量: {len(cum_df)}")
+            return True
+        
+        except Exception as e:
+            logging.error(f"更新汇总文件失败: {e}")
+            import traceback
+            logging.error(f"详细错误信息: {traceback.format_exc()}")
+            return False
+        
+    def process_data(self):
+        """主处理流程（带完整验证）"""
+        try:
+            # 1. 获取数据
+            today_df = self.fetch_data()
+            if today_df.empty:
+                raise ValueError("获取到的数据为空")
+            
+            # 2. 保存原始数据
+            if not self.save_daily_data(today_df):
+                raise ValueError("保存原始数据失败")
+            # 3. 计算变化
+            changes_df = self.calculate_daily_changes(today_df)
+            if changes_df is None or changes_df.empty:
+                raise ValueError("计算变化失败")
+            
+            # 4. 指数聚合
+            aggregated = self.aggregate_by_index(changes_df)
+            if aggregated is None or aggregated.empty:
+                raise ValueError("指数聚合失败")
+            
+            # 5. 更新汇总
+            if not self.update_summary_files(aggregated):
+                raise ValueError("更新汇总失败")
+            
+            # 打印结果
+            print("\n【执行结果】")
+            print(f"处理ETF数量: {len(today_df)}")
+            print(f"有效指数数量: {len(aggregated)}")
+            print(f"规模变化总额: {aggregated['规模变化'].sum():,.2f}")
+            print("\n指数变化TOP10:")
+            print(aggregated.sort_values('规模变化', ascending=False)
+                  .head(10)
+                  .to_markdown(index=False))
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"处理流程异常: {e}")
+            return False
+
+if __name__ == "__main__":
+    # 配置日志
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=[
+            logging.FileHandler("etf_crawler.log", encoding='utf-8'),
+            logging.StreamHandler()
+        ]
+    )
+    
+    logging.info("===== ETF数据处理器启动 =====")
+    crawler = ETFCrawler()
+    
+    success = crawler.process_data()
+
+    if not success:
+        logging.error("!!! 处理过程中出现错误，请检查日志 !!!")
+    
+    logging.info("===== 处理完成 =====")
+
