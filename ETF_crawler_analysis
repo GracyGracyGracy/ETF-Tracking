@@ -8,7 +8,7 @@ import openpyxl
 
 class ETFCrawler:
     def __init__(self):
-        # 基本配置
+        # Basic Configuration
         self.BASE_URL = "https://www.jisilu.cn/data/etf/etf_list/"
         self.HEADERS = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -18,7 +18,7 @@ class ETFCrawler:
         }
         self.session = requests.Session()
         
-        # 文件配置
+        # File Configuration
         self.DATA_DIR = "etf_data1"
         self.SUMMARY_FILE = "index_summary.xlsx"  # 改为xlsx
         self.CHANGES_FILE = "daily_changes.xlsx"  # 改为xlsx
@@ -26,11 +26,11 @@ class ETFCrawler:
         self.MANUAL_EXCEL = "manual_index_data.xlsx"
         self.FIRST_DAY_SHARES = "first_day_shares.xlsx"
         
-        # 创建数据目录
+        # Create Data Directory
         os.makedirs(self.DATA_DIR, exist_ok=True)
 
     def make_request(self, max_retries=3):
-        """带重试机制的请求函数"""
+        """Request Function with Retry Mechanism"""
         for attempt in range(max_retries):
             try:
                 params = {
@@ -45,25 +45,25 @@ class ETFCrawler:
                 response.raise_for_status()
                 return response
             except requests.exceptions.SSLError as e:
-                logging.warning(f"SSL错误（尝试 {attempt+1}/{max_retries}）: {e}")
+                logging.warning(f"SSL Error (Attempt {attempt+1}/{max_retries}）: {e}")
                 time.sleep(2)
             except requests.exceptions.RequestException as e:
-                logging.warning(f"请求失败（尝试 {attempt+1}/{max_retries}）: {e}")
+                logging.warning(f"Request Failed (Attempt {attempt+1}/{max_retries}）: {e}")
                 time.sleep(2)
         return None
 
     def fetch_data(self):
-        """获取ETF数据并验证"""
-        logging.info("开始获取ETF数据...")
+        """Fetching and Validating ETF Data"""
+        logging.info("Initiating ETF Data Retrieval...")
         response = self.make_request()
         if not response:
-            logging.error("请求失败")
+            logging.error("Request Failure")
             return pd.DataFrame()
 
         try:
             data = response.json()
             if not isinstance(data, dict) or "rows" not in data:
-                logging.error("响应数据结构异常")
+                logging.error("Response Data Structure Exception")
                 return pd.DataFrame()
             records = []
             for item in data["rows"]:
@@ -77,14 +77,14 @@ class ETFCrawler:
                         "指数": cell.get("index_nm", "")
                     })
                 except (ValueError, TypeError) as e:
-                    logging.warning(f"数据解析异常: {e}，跳过该记录")
+                    logging.warning(f"Data Parsing Exception: {e}，Skip Record")
             
             df = pd.DataFrame(records)
             if df.empty:
-                logging.error("获取到的ETF数据为空")
+                logging.error("Retrieved ETF Data is Empty")
                 return df
             
-            # 数据验证
+            # Data Validation
             zero_nav = df[df['净值'] == 0]
             zero_share = df[df['份额(万份)'] == 0]
             if not zero_nav.empty:
