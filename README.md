@@ -2,13 +2,13 @@
 Open-End Fund's automatic crawler and data analysis
 
 # Function
-crawl data from JISILU.CN
+Crawl data from JISILU.CN.
 
-calculate every-day ETF Assets Under Management change from Shares and Net Asset Value
+Calculate every-day ETF Assets Under Management change from Shares and Net Asset Value.
 
-calculate Cumulative Change in Assets Under Management over Multiple Days
+Calculate Cumulative Change in Assets Under Management over Multiple Days.
 
-organize data into Excel for subsequent data visualization
+Organize data into Excel for subsequent data visualization.
 
 # Instruction
 Ensure that manual_index_data and etf_data1 are located in the same directory as the crawler code. 
