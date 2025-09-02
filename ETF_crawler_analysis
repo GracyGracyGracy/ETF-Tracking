@@ -88,25 +88,25 @@ class ETFCrawler:
             zero_nav = df[df['净值'] == 0]
             zero_share = df[df['份额(万份)'] == 0]
             if not zero_nav.empty:
-                logging.warning(f"发现{len(zero_nav)}条净值为0的记录")
+                logging.warning(f"{len(zero_nav)}Zero Net Value Records Found")
             if not zero_share.empty:
-                logging.warning(f"发现{len(zero_share)}条份额为0的记录")
+                logging.warning(f"{len(zero_share)}Zero Net Value Records Found")
             
-            logging.info(f"成功获取{len(df)}条ETF数据，净值范围[{df['净值'].min():.2f}-{df['净值'].max():.2f}]")
+            logging.info(f"{len(df)}Successful Data Retrieval，Net Value Range[{df['净值'].min():.2f}-{df['净值'].max():.2f}]")
             return df
             
         except Exception as e:
-            logging.error(f"数据处理失败: {e}")
+            logging.error(f"Data Processing Failure: {e}")
             return pd.DataFrame()
 
     def save_daily_data(self, df):
-        """保存每日数据为Excel"""
+        """Save Daily Data as Excel"""
         if df.empty:
-            logging.warning("无数据可保存")
+            logging.warning("No Data Available for Saving")
             return False
         
         date_str = datetime.now().strftime("%Y-%m-%d")
-        filename = os.path.join(self.DATA_DIR, f"ETF_{date_str}.xlsx")  # 改为xlsx
+        filename = os.path.join(self.DATA_DIR, f"ETF_{date_str}.xlsx")
         
         try:
             df.to_excel(
@@ -114,36 +114,36 @@ class ETFCrawler:
                 index=False,
                 engine='openpyxl'
             )
-            logging.info(f"数据已保存至Excel文件 {filename}")
+            logging.info(f"Data Successfully Saved to Excel File {filename}")
             return True
         except Exception as e:
-            logging.error(f"保存失败: {e}")
+            logging.error(f"Save Operation Failed: {e}")
             return False
 
     def get_previous_shares(self):
-        """获取历史份额数据（带严格错误检查）"""
+        """Retrieve Historical Share Data with Strict Error Checking"""
         def safe_read_excel(path):
             try:
                 df = pd.read_excel(
                     path,
                     engine='openpyxl',
-                    dtype={'代码': str},  # 关键修正点
-                    usecols=['代码', '份额(万份)']  # 明确指定列
+                    dtype={'代码': str}, 
+                    usecols=['代码', '份额(万份)']  
                 )
                 df['代码'] = df['代码'].str.strip()
                 return df
             except Exception as e:
-                print(f"读取Excel失败 [{path}]: {str(e)}")
+                print(f"Failed to Read Excel File [{path}]: {str(e)}")
                 return None
 
-        # 1. 优先读取手动准备的初始数据
+        # Prioritize-Reading Manually Prepared Initial Data
         if os.path.exists(self.FIRST_DAY_SHARES):
             df = safe_read_excel(self.FIRST_DAY_SHARES)
             if df is not None:
-                print("√ 成功读取初始份额数据")
+                print("√ Successfully Read Initial Share Data")
                 return df[['代码', '份额(万份)']]
 
-        # 2. 尝试读取历史Excel文件
+        # Attempt to Read Historical Excel File
         date_str = datetime.now().strftime("%Y-%m-%d")
         excel_files = sorted(
             [f for f in os.listdir(self.DATA_DIR) 
@@ -159,32 +159,32 @@ class ETFCrawler:
                     usecols=['代码', '份额(万份)']
                 )
                 df['代码'] = df['代码'].str.strip()
-                print(f"√ 读取历史Excel数据: {excel_files[0]}")
+                print(f"√ Read Historical Excel Data: {excel_files[0]}")
                 return df[['代码', '份额(万份)']]
             except Exception as e:
-                print(f"读取Excel失败: {str(e)}")
+                print(f"Failed to Read Excel File: {str(e)}")
 
-        print("× 无可用历史数据")
+        print("× No Available Historical Data")
         return None
 
     def calculate_daily_changes(self, today_df):
-        """计算规模变化（增强版）"""
+        """Calculate Scale Variation"""
         prev_shares = self.get_previous_shares()
         
         if prev_shares is None:
-            logging.warning("无历史份额数据，将计算当日规模")
+            logging.warning("No Historical Share Data; Calculate Today's Scale")
             today_df['规模变化'] = today_df['净值'] * today_df['份额(万份)']
             return today_df[['代码', '指数', '规模变化']]
         
-        # 数据预处理
+        # Data Preprocessing
         today_df['代码'] = today_df['代码'].astype(str).str.strip()
         prev_shares['代码'] = prev_shares['代码'].astype(str).str.strip()
         
-        # 调试输出
-        logging.info(f"今日数据前5条:\n{today_df[['代码','净值','份额(万份)']].head()}")
-        logging.info(f"历史份额前5条:\n{prev_shares.head()}")
+        # Debug Output
+        logging.info(f"Top 5 Records of Today's Data:\n{today_df[['代码','净值','份额(万份)']].head()}")
+        logging.info(f"Top 5 Records of Historical Shares:\n{prev_shares.head()}")
         
-        # 合并数据（保留所有记录用于调试）
+        # Merge Data (Retain All Records for Debugging)
         merged = pd.merge(
             today_df[['代码', '净值', '份额(万份)', '指数']],
             prev_shares,
@@ -194,23 +194,23 @@ class ETFCrawler:
             indicator=True
         ).reset_index(drop=True)
         
-        # 分析合并结果
+        # Analyze Merge Results
         merge_stats = merged['_merge'].value_counts()
-        logging.info(f"合并情况:\n{merge_stats}")
+        logging.info(f"Merge Status:\n{merge_stats}")
         
-        # 计算变化（只处理今日存在的ETF）
+        # Calculate Changes (Only for ETFs Present Today)
         result = merged[merged['_merge'].isin(['both', 'left_only'])]
         result['规模变化'] = result['净值'] * (
             result['份额(万份)_today'].fillna(0) - 
             result['份额(万份)_yesterday'].fillna(0)
         )
         
-        # 标记新增ETF
+        # Mark New ETFs
         new_etfs = result['_merge'] == 'left_only'
         if new_etfs.any():
-            logging.info(f"发现{new_etfs.sum()}只新增ETF")
+            logging.info(f"Discover{new_etfs.sum()}New ETFs")
         
-        # 结果验证
+        # Result Validation
         zero_changes = result[result['规模变化'] == 0]
         if len(zero_changes) > 0.5 * len(result):
             logging.warning(f"发现{len(zero_changes)}条零变化记录，请检查数据！")
@@ -218,33 +218,33 @@ class ETFCrawler:
                 today_df[['代码', '净值', '份额(万份)']], 
                 on='代码'
             )
-            logging.info(f"零变化样例:\n{sample}")
+            logging.info(f"Zero Change Example:\n{sample}")
         
         return result[['代码', '指数', '规模变化']]
 
     def aggregate_by_index(self, changes_df):
-        """指数聚合（严格模式）"""
+        """Index Aggregation"""
         if changes_df is None or changes_df.empty:
-            logging.error("无有效变化数据")
+            logging.error("No Significant Change Data")
             return pd.DataFrame(columns=['指数', '规模变化'])
         try:
-            # 读取参考指数
+            # Reading Reference Index
             ref_df = pd.read_excel(
                 self.MANUAL_EXCEL,
                 engine='openpyxl',
                 header=0
             )
             valid_indices = ref_df['指数'].dropna().unique()
-            # 标记新增指数
+            # Marking New Indices
             new_indices_mask = ~changes_df['指数'].isin(valid_indices)
             new_indices = changes_df[new_indices_mask]['指数'].unique()
             if len(new_indices) > 0:
-                logging.info(f"发现{len(new_indices)}个新增指数: {new_indices}")
+                logging.info(f"Discovering{len(new_indices)}New Indices: {new_indices}")
             
-                # 准备新增指数数据
+                # Preparing Data for New Indices
                 new_rows = []
                 for idx in new_indices:
-                    # 对于新指数，规模变化应该是其ETF的净值×份额
+                    # AUM Change for New Indices = ∑(NAV of ETF × Shares)
                     etf_data = changes_df[changes_df['指数'] == idx]
                     total_change = etf_data['规模变化'].sum()
                     new_rows.append({
@@ -252,49 +252,49 @@ class ETFCrawler:
                         '规模变化': total_change
                     })
             
-                # 将新增指数添加到manual_index_data.xlsx
+                # Adding New Indices to manual_index_data.xlsx
                 new_indices_df = pd.DataFrame({
                     '指数': new_indices,
                     '份额(万份)': 0,
                     '计数项': None
                 })
             
-                # 根据原始格式调整列顺序
+                # Adjusting Column Order According to Original Format
                 if len(ref_df.columns) == 3:
                     new_indices_df = new_indices_df[['计数项', '份额(万份)', '指数']]
 
-                # 合并新旧数据并去重
+                # Merging New and Old Data with Deduplication
                 updated_ref_df = pd.concat([ref_df, new_indices_df]).drop_duplicates(subset=['指数'])
-                # 保存更新后的文件
+                # Saving the Updated File
                 updated_ref_df.to_excel(
                     self.MANUAL_EXCEL,
                     index=False,
                     engine='openpyxl'
                 )
-                logging.info(f"已将{len(new_indices)}个新增指数添加到{self.MANUAL_EXCEL}")
+                logging.info(f"{len(new_indices)}New Indices have been added to{self.MANUAL_EXCEL}")
             
-                # 立即重新加载有效指数列表
+                # Immediate Reload of Active Index List
                 valid_indices = updated_ref_df['指数'].dropna().unique()
         
-            # 最终聚合结果 - 包含原有指数和新增指数
+            # Final Aggregated Results - Including Existing and New Indices
             aggregated = changes_df.groupby('指数', as_index=False)['规模变化'].sum().reset_index(drop=True)
             aggregated = aggregated.sort_values('指数', key=lambda x: x.str.strip())
             
-            # 额外的数据验证
-            logging.info(f"聚合后指数数量: {len(aggregated)}")
-            logging.info(f"聚合后前5个指数: {aggregated['指数'].head().tolist()}")
+            # Additional Data Validation
+            logging.info(f"Number of Indices After Aggregation: {len(aggregated)}")
+            logging.info(f"Top 5 Indices After Aggregation: {aggregated['指数'].head().tolist()}")
             
             return aggregated
         
         except Exception as e:
-            logging.error(f"指数聚合失败: {e}")
-            # 回退到简单聚合
+            logging.error(f"Index Aggregation Failure: {e}")
+            # Reverting to Simple Aggregation
             return changes_df.groupby('指数', as_index=False)['规模变化'].sum().reset_index(drop=True)
 
     def update_summary_files(self, aggregated_changes):
-        """更新汇总文件（修复数据错位问题）"""
+        """Update Summary File"""
         if aggregated_changes is None or aggregated_changes.empty:
-            logging.error("无有效聚合数据")
+            logging.error("No Valid Aggregated Data")
             return False
         
         date_str = datetime.now().strftime("%Y-%m-%d")
@@ -302,32 +302,32 @@ class ETFCrawler:
         cumulative_path = os.path.join(self.DATA_DIR, self.CUMULATIVE_FILE)
 
         try:
-            # 创建变化字典，用于精确映射
+            # Create Change Dictionary for Precise Mapping
             change_dict = dict(zip(aggregated_changes['指数'], aggregated_changes['规模变化']))
             
-            # 读取或创建每日变化文件
+            # Read or Create Daily Change File
             if os.path.exists(daily_path):
                 daily_df = pd.read_excel(daily_path, engine='openpyxl')
                 
-                # 格式化现有日期列名
+                # Format Existing Date Column Names
                 date_cols = [col for col in daily_df.columns if col != '指数']
                 for col in date_cols:
                     if isinstance(col, datetime):
                         new_col_name = col.strftime("%Y-%m-%d")
                         daily_df = daily_df.rename(columns={col: new_col_name})
                 
-                # 处理新增指数：在正确位置插入新行
+                # Handle New Indices: Insert New Rows in the Correct Position
                 existing_indices = set(daily_df['指数'])
                 new_indices = set(aggregated_changes['指数']) - existing_indices
                 
                 if new_indices:
                     logging.info(f"发现{len(new_indices)}个新增指数: {sorted(new_indices)}")
                     
-                    # 为新增指数创建完整的行数据
+                    # Create Complete Row Data for New Indices
                     new_rows_data = []
                     for idx in new_indices:
                         row_data = {'指数': idx}
-                        # 为所有历史日期填充0
+                        # Fill All Historical Dates with Zeros
                         for existing_date in daily_df.columns:
                             if existing_date != '指数':
                                 row_data[existing_date] = 0
@@ -336,34 +336,34 @@ class ETFCrawler:
                     new_rows_df = pd.DataFrame(new_rows_data)
                     daily_df = pd.concat([daily_df, new_rows_df], ignore_index=True)
 
-                # 检查是否已存在当日数据
+                # Check for Existing Data for the Current Day
                 if date_str in daily_df.columns:
                     logging.warning(f"覆盖已有日期数据: {date_str}")
                 
-                # 使用精确映射更新当日数据
+                # Update Today's Data Using Exact Mapping
                 daily_df[date_str] = daily_df['指数'].map(change_dict).fillna(0)
                 
             else:
-                # 创建新的每日变化文件
+                # Create a New Daily Change File
                 daily_df = pd.DataFrame({
                     '指数': aggregated_changes['指数'],
                     date_str: aggregated_changes['规模变化']
                 })
                 daily_df = daily_df.sort_values('指数').reset_index(drop=True)
 
-            # 读取或创建累计文件
+            # Read or Create Cumulative File
             if os.path.exists(cumulative_path):
                 cum_df = pd.read_excel(cumulative_path, engine='openpyxl', dtype={'指数': str})
                 
-                # 确保累计文件包含所有指数（包括新增的）
+                # Ensure Cumulative File Contains All Indices (Including New Ones)
                 missing_indices = set(daily_df['指数']) - set(cum_df['指数'])
                 if missing_indices:
 
-                    logging.info(f"累计文件中添加{len(missing_indices)}个新指数")
+                    logging.info(f"Add{len(missing_indices)}New Indices to Cumulative File")
                     new_rows_data = []
                     for idx in missing_indices:
                         row_data = {'指数': idx}
-                        # 为现有累计列填充0
+                        # Fill Existing Cumulative Columns with Zeros
                         for col in cum_df.columns:
                             if col != '指数':
                                 row_data[col] = 0
@@ -372,83 +372,83 @@ class ETFCrawler:
                     new_rows_df = pd.DataFrame(new_rows_data)
                     cum_df = pd.concat([cum_df, new_rows_df], ignore_index=True)
                 
-                # 确保指数顺序一致
+                # Ensure Consistent Order of Indices
                 cum_df = cum_df.sort_values('指数').reset_index(drop=True)
                 
             else:
                 cum_df = pd.DataFrame({'指数': daily_df['指数'].copy()})
 
-            # 计算累计变化（修复数据对齐问题）
+            # Calculate Cumulative Changes
             date_cols = [col for col in daily_df.columns if col != '指数']
             
-            # 确保两个DataFrame的指数顺序完全一致
+            # Ensure Indices Order is Identical in Two DataFrames
             daily_df = daily_df.sort_values('指数').reset_index(drop=True)
             cum_df = cum_df.sort_values('指数').reset_index(drop=True)
             
-            # 验证指数对齐
+            # Validate Index Alignment
             if not daily_df['指数'].equals(cum_df['指数']):
                 logging.error("daily_df和cum_df的指数不一致！")
                 logging.info(f"daily_df指数: {daily_df['指数'].tolist()[:10]}")
                 logging.info(f"cum_df指数: {cum_df['指数'].tolist()[:10]}")
                 logging.info(f"cum_df指数: {cum_df['指数'].tolist()[:10]}")
                 
-                # 强制对齐
+                # Index Alignment
                 cum_df = cum_df.set_index('指数').reindex(daily_df['指数']).reset_index()
-                cum_df['指数'] = daily_df['指数']  # 确保指数列正确
+                cum_df['指数'] = daily_df['指数']
             
-            # 计算累计变化
+            # Calculate Cumulative Changes
             days = len(date_cols)
             if days > 0:
-                # 只对存在于daily_df中的日期列进行累计计算
+                # Calculate Cumulative Changes for Existing Dates in daily_df
                 valid_date_cols = [col for col in date_cols if col in daily_df.columns]
                 cum_df[f"{days}天累计"] = daily_df[valid_date_cols].sum(axis=1)
             
-            # 保存文件
+            # Save File
             daily_df.to_excel(daily_path, index=False, engine='openpyxl')
             cum_df.to_excel(cumulative_path, index=False, engine='openpyxl')
         
-            logging.info(f"成功更新汇总文件，包含{len(date_cols)}个交易日数据")
-            logging.info(f"每日变化文件指数数量: {len(daily_df)}")
-            logging.info(f"累计变化文件指数数量: {len(cum_df)}")
+            logging.info(f"Successfully updated the summary file, which now contains data for{len(date_cols)}trading days.")
+            logging.info(f"Daily Change File Index Count: {len(daily_df)}")
+            logging.info(f"Cumulative Change File Index Count: {len(cum_df)}")
             return True
         
         except Exception as e:
-            logging.error(f"更新汇总文件失败: {e}")
+            logging.error(f"Summary File Update Failure: {e}")
             import traceback
-            logging.error(f"详细错误信息: {traceback.format_exc()}")
+            logging.error(f"Detailed Error Information: {traceback.format_exc()}")
             return False
         
     def process_data(self):
-        """主处理流程（带完整验证）"""
+        """Main Processing Flow (with Complete Validation)"""
         try:
-            # 1. 获取数据
+            # 1. Data Retrieval
             today_df = self.fetch_data()
             if today_df.empty:
-                raise ValueError("获取到的数据为空")
+                raise ValueError("Retrieved Data is Empty")
             
-            # 2. 保存原始数据
+            # 2. Save Raw Data
             if not self.save_daily_data(today_df):
-                raise ValueError("保存原始数据失败")
-            # 3. 计算变化
+                raise ValueError("Failed to Save Raw Data")
+            # 3. Calculate Change
             changes_df = self.calculate_daily_changes(today_df)
             if changes_df is None or changes_df.empty:
-                raise ValueError("计算变化失败")
+                raise ValueError("Failed to Calculate Change")
             
-            # 4. 指数聚合
+            # 4. Index Aggregation
             aggregated = self.aggregate_by_index(changes_df)
             if aggregated is None or aggregated.empty:
-                raise ValueError("指数聚合失败")
+                raise ValueError("Failed to Aggregate Index")
             
-            # 5. 更新汇总
+            # 5. Update Summary
             if not self.update_summary_files(aggregated):
-                raise ValueError("更新汇总失败")
+                raise ValueError("Failed to Update Summary")
             
-            # 打印结果
-            print("\n【执行结果】")
-            print(f"处理ETF数量: {len(today_df)}")
-            print(f"有效指数数量: {len(aggregated)}")
-            print(f"规模变化总额: {aggregated['规模变化'].sum():,.2f}")
-            print("\n指数变化TOP10:")
+            # Print Results
+            print("\n【Execution Results】")
+            print(f"Process ETF Count: {len(today_df)}")
+            print(f"Effective Index Count: {len(aggregated)}")
+            print(f"Total AUM Change: {aggregated['规模变化'].sum():,.2f}")
+            print("\nAUM ChangeTOP10:")
             print(aggregated.sort_values('规模变化', ascending=False)
                   .head(10)
                   .to_markdown(index=False))
@@ -456,11 +456,11 @@ class ETFCrawler:
             return True
             
         except Exception as e:
-            logging.error(f"处理流程异常: {e}")
+            logging.error(f"abnormal processing flow: {e}")
             return False
 
 if __name__ == "__main__":
-    # 配置日志
+    # log configuration
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s [%(levelname)s] %(message)s',
@@ -470,13 +470,13 @@ if __name__ == "__main__":
         ]
     )
     
-    logging.info("===== ETF数据处理器启动 =====")
+    logging.info("===== ETF data processor initialization =====")
     crawler = ETFCrawler()
     
     success = crawler.process_data()
 
     if not success:
-        logging.error("!!! 处理过程中出现错误，请检查日志 !!!")
+        logging.error("!!! An error occurred during processing. Please check the logs !!!")
     
-    logging.info("===== 处理完成 =====")
+    logging.info("===== Processing completed =====")
 
