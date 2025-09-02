@@ -17,9 +17,9 @@ On the initial execution of this code, ensure first_day_shares is in the same di
 
 Results will be outputted to etf_data1 folder.
 
-Recommend-Schedule the code with the Windows Task Scheduler or Linux cron if needed.
+Recommendation-Schedule the code with the Windows Task Scheduler or Linux cron if needed.
 
-Recommend-For AUM-filtering results, include that day's AUM column to the latest output for filtering (use the latest daily NAV*Shares to compute AUM), ensuring AUM aligns with the Index column.
+Recommendation-For AUM-filtering results, include that day's AUM column to the latest output for filtering (use the latest daily NAV*Shares to compute AUM), ensuring AUM aligns with the Index column.
 
 # Library
 Built-in Python Libraries: time, os, datetime, logging
